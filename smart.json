@@ -1,0 +1,8 @@
+{
+    "name": "postgres",
+    "description": "PostgreSQL for Meteor",
+    "homepage": "https://github.com/zakm/meteor-postgres",
+    "author": "Zak McCreery",
+    "version": "0.0.1",
+    "git": "https://github.com/zakm/meteor-postgres"
+}
