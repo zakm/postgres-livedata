@@ -1,5 +1,6 @@
 
     pg = Npm.require "pg.js"
+    Fiber = Npm.require "fibers"
 
 
 ## Helper functions
@@ -7,7 +8,10 @@
 Escape Postgres identifiers
 
     escapeName = (name) ->
-        '"' + name.replace(/"/g, '""') + '"'
+        if _.isArray name
+            _.map(name, escapeName).join "."
+        else
+            '"' + name.replace(/"/g, '""') + '"'
 
 
 Convert a list of column names to a string
@@ -88,16 +92,66 @@ Convert Mongo query to SQL `SELECT` statement
             + if where.length > 0 then " WHERE #{where}" else ""
         params: params
 
+
+    updates = (col, val, columns, values, params) ->
+        switch col
+            when "$inc"
+                for c, v of val
+                    columns.push c
+                    next = nextParam v, params
+                    values.push "#{escapeName c} + #{next}"
+
+            when "$mul"
+                for c, v of val
+                    columns.push c
+                    next = nextParam v, params
+                    values.push "#{escapeName c} * #{next}"
+
+            when "$set"
+                for c, v of val
+                    columns.push c
+                    values.push nextParam v, params
+
+            when "$unset"
+                for c, v of val
+                    columns.push c
+                    values.push "NULL"
+
+            when "$min"
+                for c, v of val
+                    columns.push c
+                    next = nextParam v, params
+                    values.push "LEAST(#{escapeName c},#{next})"
+
+            when "$max"
+                for c, v of val
+                    columns.push c
+                    next = nextParam v, params
+                    values.push "GREATEST(#{escapeName c},#{next})"
+
+            when "$currentDate"
+                for c, v of val
+                    columns.push c
+                    values.push "NOW()"
+
+            else
+                columns.push col
+                values.push nextParam val, params
+
 Convert a document into columns, values, and parameters
 
-    cvp = (document) ->
+    cvp = (document, update) ->
         columns = []
         values = []
         params = []
 
-        for col, val of document
-            columns.push col
-            values.push nextParam val, params
+        if update?
+            for col, val of document
+                updates col, val, columns, values, params
+        else
+            for col, val of document
+                columns.push col
+                values.push nextParam val, params
 
         columns: columns
         values: values
@@ -112,7 +166,7 @@ Convert Mongo document into `INSERT` statement
         params: params
 
     makeUpdate = (name, selector, document) ->
-        {columns, values, params} = cvp document
+        {columns, values, params} = cvp document, "update"
 
         where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
 
@@ -140,6 +194,91 @@ Provides `this` in `PgCollection::transact`
         exec: (query, params...) ->
             Async.wrap(client.query) query, params
 
+# PgCursor
+
+Should behave like a Mongo cursor
+
+    class PgCursor
+
+        @_listeners: {}
+
+        constructor: (collection, result) ->
+            @collection = collection
+            @name = collection.name
+            @_next = 0
+            @rows = result.rows
+
+        _publishCursor: (sub) ->
+            Meteor.Collection._publishCursor @, sub, @name
+
+        observe: (callbacks) ->
+            LocalCollection._observeFromObserveChanges @, callbacks
+
+        observeChanges: (callbacks) ->
+            self = @
+            ordered = LocalCollection._observeChangesCallbacksAreOrdered callbacks
+            if not PgCursor._listeners[@name]
+                listeners = PgCursor._listeners[@name] = {}
+                @collection.listen ([schema,table,action,fields,pkeys]) ->
+                    if _.size(pkeys) == 1
+                        pkeys = _.sample(pkeys)
+
+                    fns = switch action
+                        when "I" then listeners.added.concat listeners.addedBefore
+                        when "U" then listeners.changed
+                        when "D" then listeners.removed
+
+                    for fn in fns
+                        fn pkeys, fields
+
+            else
+                listeners = PgCursor._listeners[@name]
+
+            for fname, fn of callbacks
+                if listeners[fname]
+                    listeners[fname].push fn
+                else
+                    listeners[fname] = [fn]
+
+
+        count: ->
+            @rows.length
+
+        forEach: (fn) ->
+            for row in rows
+                fn row
+            undefined
+
+        hasNext: ->
+            @_next < @rows.length
+
+        map: (fn) ->
+            _.map @rows, fn
+
+        next: ->
+            @rows[@_next++] if @hasNext
+
+        objsLeftInBatch: ->
+            @rows.length - @_next
+
+        size: ->
+            @rows.length - @_next
+
+        skip: (n) ->
+            @_next += n
+
+        sort: (sort) ->
+            @rows.sort (a,b) ->
+                for field, ord of sort
+                    if a[field] < b[field]
+                        return ord
+                    else if a[field] > b[field]
+                        return -ord
+
+                return 0
+
+        toArray: ->
+            @rows
 
 
 # PgCollection
@@ -173,7 +312,7 @@ Simulate Mongo's `find` method
 
         find: (criteria, projection) ->
             {query, params} = makeSelect @name, criteria, projection
-            @exec query, params
+            new PgCursor @, @exec query, params
 
 
 Simulate Mongo's `insert` method
@@ -216,7 +355,7 @@ Connect to the postgres server and execute `fn`
 Execute a parameterized query
 
         exec: (query, params) ->
-            console.log "exec", query, params
+            console.log query, params
             @connect (client, release, done) ->
                 client.query query, params, (err, result) ->
                     release()
@@ -236,6 +375,21 @@ actually take effect. `@rollback()` to rollback your changes.
                     catch e
                         rollback client, release
                         done if e is doRollback then null else e
+
+
+Listen for notifications on the given channel and call `fn` when received
+If only a callback is passed, then default the channel to the collection name
+
+        listen: (channel, fn) ->
+            if _.isFunction channel
+                fn = channel
+                channel = @name
+            client = new pg.Client @config.connection
+            client.connect()
+            client.query "LISTEN #{escapeName channel}"
+            client.on "notification", (msg) ->
+                data = JSON.parse msg.payload
+                Fiber( -> fn data ).run()
 
 
 Interactive testing
