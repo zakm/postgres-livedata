@@ -2,7 +2,6 @@
     pg = Npm.require "pg.js"
     Fiber = Npm.require "fibers"
 
-
 ## Helper functions
 
 Escape Postgres identifiers
@@ -93,6 +92,8 @@ Convert Mongo query to SQL `SELECT` statement
         params: params
 
 
+Convert Mongo modifiers into SQL `UPDATE` fragments
+
     updates = (col, val, columns, values, params) ->
         switch col
             when "$inc"
@@ -165,6 +166,9 @@ Convert Mongo document into `INSERT` statement
         query: "INSERT INTO #{escapeName name} (#{columnsToString columns}) VALUES (#{values.join ","})"
         params: params
 
+
+Convert Mongo selector and document into `UPDATE` statement
+
     makeUpdate = (name, selector, document) ->
         {columns, values, params} = cvp document, "update"
 
@@ -175,7 +179,7 @@ Convert Mongo document into `INSERT` statement
         params: params
 
 
-A unique object that can be thrown to trigger a rollback
+Object that is thrown to trigger a rollback
 
     doRollback = {doRollback:true}
 
@@ -210,26 +214,32 @@ Should behave like a Mongo cursor
 
         _publishCursor: (sub) ->
             Meteor.Collection._publishCursor @, sub, @name
+            for row in @rows
+                for fn in PgCursor._listeners[@name].added
+                    fn? row.id, row
 
         observe: (callbacks) ->
-            LocalCollection._observeFromObserveChanges @, callbacks
+            @observeChanges callbacks
 
         observeChanges: (callbacks) ->
             self = @
             ordered = LocalCollection._observeChangesCallbacksAreOrdered callbacks
-            if not PgCursor._listeners[@name]
+            unless PgCursor._listeners[@name]
                 listeners = PgCursor._listeners[@name] = {}
                 @collection.listen ([schema,table,action,fields,pkeys]) ->
+
                     if _.size(pkeys) == 1
-                        pkeys = _.sample(pkeys)
+                        pkeys = _.values(pkeys)[0]
 
                     fns = switch action
-                        when "I" then listeners.added.concat listeners.addedBefore
+                        when "I" then listeners.added
                         when "U" then listeners.changed
                         when "D" then listeners.removed
 
                     for fn in fns
-                        fn pkeys, fields
+                        fn? pkeys, fields
+
+                    undefined
 
             else
                 listeners = PgCursor._listeners[@name]
@@ -239,6 +249,13 @@ Should behave like a Mongo cursor
                     listeners[fname].push fn
                 else
                     listeners[fname] = [fn]
+
+            stop: ->
+                self.collection.unlisten
+                for fname, fn of callbacks
+                    if listeners[fname]
+                        listeners[fname] = _.without listeners[fname], fn
+                undefined
 
 
         count: ->
@@ -305,7 +322,23 @@ Global configuration
 Allow instances to have custom configuration, but default to global config
 
         constructor: (@name, options) ->
+            @listen_client = {}
             @config = _.extend {}, PgCollection._config, options
+            @setupMethods options.methods
+
+
+Endpoints for the client to hit
+
+        setupMethods: (methods={}) ->
+            self = @
+            pfx = "/#{@name}\x2f"
+            m = {}
+
+            _.each ["insert", "update", "remove"], (method) ->
+                m[pfx + method] = ->
+                    (methods[method] ? self[method]).apply self, arguments
+
+            Meteor.methods m
 
 
 Simulate Mongo's `find` method
@@ -384,12 +417,21 @@ If only a callback is passed, then default the channel to the collection name
             if _.isFunction channel
                 fn = channel
                 channel = @name
-            client = new pg.Client @config.connection
-            client.connect()
-            client.query "LISTEN #{escapeName channel}"
-            client.on "notification", (msg) ->
-                data = JSON.parse msg.payload
-                Fiber( -> fn data ).run()
+
+            unless @listen_client[channel]
+                @listen_client[channel] = client = new pg.Client @config.connection
+                client.connect()
+                client.query "LISTEN #{escapeName channel}"
+                client.on "notification", (msg) ->
+                    data = JSON.parse msg.payload
+                    Fiber( -> fn data ).run()
+
+        unlisten: (channel) ->
+            channel ?= @name
+            @listen_client[channel]?.query "UNLISTEN #{escapeName channel}"
+            @listen_client[channel]?.end()
+            delete @listen_client[channel]
+
 
 
 Interactive testing

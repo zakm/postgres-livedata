@@ -5,7 +5,7 @@ Package.describe({
 Npm.depends({ "pg.js": "3.1.0" });
 
 Package.on_use(function(api) {
-    api.use( ['underscore', 'coffeescript', 'npm'], 'server' );
+    api.use( ['underscore', 'coffeescript', 'npm', 'minimongo'], 'server' );
     api.export( ['PgCollection'] );
     api.add_files( ['postgres_server.litcoffee'], 'server');
 });
