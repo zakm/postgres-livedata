@@ -139,7 +139,7 @@ Convert Mongo modifiers into SQL `UPDATE` fragments
                 columns.push col
                 values.push nextParam val, params
 
-Convert a document into columns, values, and parameters
+Convert a document/mutator to columns, values, and parameters
 
     cvp = (document, update) ->
         columns = []
@@ -158,7 +158,7 @@ Convert a document into columns, values, and parameters
         values: values
         params: params
 
-Convert Mongo document into `INSERT` statement
+Convert Mongo document to `INSERT` statement
 
     makeInsert = (name, document) ->
         {columns, values, params} = cvp document
@@ -167,14 +167,25 @@ Convert Mongo document into `INSERT` statement
         params: params
 
 
-Convert Mongo selector and document into `UPDATE` statement
+Convert Mongo selector and mutator to `UPDATE` statement
 
-    makeUpdate = (name, selector, document) ->
-        {columns, values, params} = cvp document, "update"
+    makeUpdate = (name, selector, mutator) ->
+        {columns, values, params} = cvp mutator, "update"
 
         where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
 
         query: "UPDATE #{escapeName name} SET (#{columnsToString columns}) = (#{values.join ","})" \
+            + if where.length > 0 then " WHERE #{where}" else ""
+        params: params
+
+
+Convert Mongo selector to `DELETE` statement
+
+    makeDelete = (name, selector) ->
+        params = []
+        where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
+
+        query: "DELETE FROM #{escapeName name}" \
             + if where.length > 0 then " WHERE #{where}" else ""
         params: params
 
@@ -197,6 +208,22 @@ Provides `this` in `PgCollection::transact`
         rollback: -> throw doRollback
         exec: (query, params...) ->
             Async.wrap(client.query) query, params
+
+
+Set up endpoints for the client to hit
+
+    setupMethods = (collection, methods={}) ->
+        pfx = "/#{@name}\x2f"
+        m = {}
+
+        _.each ["insert", "update", "remove"], (method) ->
+            m[pfx + method] = ->
+                validateMethodName = "_validate" + method.charAt(0).toUpperCase() + method.slice(1)
+                collection[validateMethodName].apply collection, arguments
+                (methods[method] ? collection[method]).apply collection, arguments
+
+        Meteor.methods m
+
 
 # PgCursor
 
@@ -323,22 +350,12 @@ Allow instances to have custom configuration, but default to global config
 
         constructor: (@name, options) ->
             @listen_client = {}
+            @_validators =
+                insert: { allow: [], deny: [] }
+                update: { allow: [], deny: [] }
+                remove: { allow: [], deny: [] }
             @config = _.extend {}, PgCollection._config, options
-            @setupMethods options.methods
-
-
-Endpoints for the client to hit
-
-        setupMethods: (methods={}) ->
-            self = @
-            pfx = "/#{@name}\x2f"
-            m = {}
-
-            _.each ["insert", "update", "remove"], (method) ->
-                m[pfx + method] = ->
-                    (methods[method] ? self[method]).apply self, arguments
-
-            Meteor.methods m
+            setupMethods @, options.methods
 
 
 Simulate Mongo's `find` method
@@ -346,6 +363,46 @@ Simulate Mongo's `find` method
         find: (criteria, projection) ->
             {query, params} = makeSelect @name, criteria, projection
             new PgCursor @, @exec query, params
+
+Check permissions before allowing the client to insert/update/delete
+
+        _validateInsert: (userId, document) ->
+            if _.any( self._validators.insert.deny, (validator) -> validator userId, doc )
+                throw new Meteor.Error 403, "Access denied"
+            if _.all( self._validators.insert.allow, (validator) -> not validator userId, doc )
+                throw new Meteor.Error 403, "Access denied"
+
+        _modifiedFields: (mutator) ->
+            fields = []
+            _.each mutator, (params, op) ->
+                _.each _.keys params, (field) ->
+                    unless field.indexOf '.' is -1
+                        field = field.substring(0, field.indexOf '.')
+                    unless _.contains fields, field
+                        fields.push( field )
+            fields
+
+        _validateUpdate: (userId, document, mutator, options) ->
+            fields = @_modifiedFields mutator
+            if _.any( self._validators.upate.deny, (validator) -> validator userId, doc, fields, mutator )
+                throw new Meteor.Error 403, "Access denied"
+            if _.all( self._validators.update.allow, (validator) -> not validator userId, doc, fields, mutator )
+                throw new Meteor.Error 403, "Access denied"
+
+
+        _validateRemove: (userId, document) ->
+            if _.any( self._validators.remove.deny, (validator) -> validator userId, doc )
+                throw new Meteor.Error 403, "Access denied"
+            if _.all( self._validators.remove.allow, (validator) -> not validator userId, doc )
+                throw new Meteor.Error 403, "Access denied"
+
+
+        _validateExec: (userId, statement) ->
+            if _.any( self._validators.exec.deny, (validator) -> validator userId, statement )
+                throw new Meteor.Error 403, "Access denied"
+            if _.all( self._validators.exec.allow, (validator) -> not validator userId, statement )
+                throw new Meteor.Error 403, "Access denied"
+
 
 
 Simulate Mongo's `insert` method
@@ -369,10 +426,15 @@ Simulate Mongo's `insert` method
 
 Simulate Mongo's `update` method
 
-        update: (selector, document, options) ->
-            {query, params} = makeUpdate @name, selector, document
+        update: (selector, mutator, options={}) ->
+            {query, params} = makeUpdate @name, selector, mutator
             @exec query, params
 
+Simulate Mongo's `remove` method
+
+        remove: (selector, options={}) ->
+            {query, params} = makeDelete @name, selector
+            @exec query, params
 
 Connect to the postgres server and execute `fn`
 
@@ -434,17 +496,6 @@ If only a callback is passed, then default the channel to the collection name
 
 
 
-Interactive testing
+        allow: -> Meteor.Collection::allow.apply @, arguments
 
-    Meteor.methods
-        insertQuery: (name, document) ->
-            makeInsert name, document
-
-        find: (name, selector, projection) ->
-            coll = new PgCollection name,
-                connection: "postgres://zakm@localhost\x2f"
-
-            try
-                coll.find selector, projection
-            catch e
-                throw new Meteor.Error 500, JSON.stringify e
+        deny: -> Meteor.Collection::deny.apply @, arguments
