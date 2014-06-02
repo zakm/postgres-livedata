@@ -88,7 +88,7 @@ Convert Mongo query to SQL `SELECT` statement
         where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
 
         query: "SELECT #{columnsToString columns} FROM #{escapeName name}" \
-            + if where.length > 0 then " WHERE #{where}" else ""
+            + if where.length > 0 then " WHERE #{where}" else "" \
             + if _.isFinite( options.limit ) then " LIMIT #{options.limit}" else ""
         params: params
 
