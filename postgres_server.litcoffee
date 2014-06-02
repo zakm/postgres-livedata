@@ -81,14 +81,15 @@ Convert Mongo selector to Postgres `WHERE` clause
 
 Convert Mongo query to SQL `SELECT` statement
 
-    makeSelect = (name, selector, projection={}) ->
-        columns = (col for col, val of projection when val)
+    makeSelect = (name, selector, options={}) ->
+        columns = (col for col, val of (options.fields ? {}) when val)
         params = []
 
         where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
 
         query: "SELECT #{columnsToString columns} FROM #{escapeName name}" \
             + if where.length > 0 then " WHERE #{where}" else ""
+            + if _.isFinite( options.limit ) then " LIMIT #{options.limit}" else ""
         params: params
 
 
@@ -213,7 +214,7 @@ Provides `this` in `PgCollection::transact`
 Set up endpoints for the client to hit
 
     setupMethods = (collection, methods={}) ->
-        pfx = "/#{@name}\x2f"
+        pfx = "/#{collection.name}\x2f"
         m = {}
 
         _.each ["insert", "update", "remove"], (method) ->
@@ -348,7 +349,7 @@ Global configuration
 
 Allow instances to have custom configuration, but default to global config
 
-        constructor: (@name, options) ->
+        constructor: (@name, options={}) ->
             @listen_client = {}
             @_validators =
                 insert: { allow: [], deny: [] }
@@ -360,9 +361,12 @@ Allow instances to have custom configuration, but default to global config
 
 Simulate Mongo's `find` method
 
-        find: (criteria, projection) ->
-            {query, params} = makeSelect @name, criteria, projection
+        find: (criteria, options) ->
+            {query, params} = makeSelect @name, criteria, options
             new PgCursor @, @exec query, params
+
+        findOne: (criteria, options) ->
+            @find( criteria, _.extend {limit:1}, options ).toArray()[0]
 
 Check permissions before allowing the client to insert/update/delete
 
