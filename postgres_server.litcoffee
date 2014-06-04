@@ -13,13 +13,20 @@ Escape Postgres identifiers
             '"' + name.replace(/"/g, '""') + '"'
 
 
+Escape a single column name
+
+    escapeColumn = (name, column) ->
+        "#{escapeName name}.#{escapeName col}"
+
+
 Convert a list of column names to a string
 
-    columnsToString = (columns) ->
+    columnsToString = (name, columns) ->
+        ename = escapeName name
         if columns.length > 0
-            _.map( columns, escapeName ).join ","
+            _.map( columns, (col) -> "#{ename}.#{escapeName col}" ).join ","
         else
-            "*"
+            "#{ename}.*"
 
 
 Build up list of parameters for paramaterized queries
@@ -77,20 +84,6 @@ Convert Mongo selector to Postgres `WHERE` clause
                     "#{escapeName name} = #{nextParam value, params}"
                 else
                     operatorClause name, value, params
-
-
-Convert Mongo query to SQL `SELECT` statement
-
-    makeSelect = (name, selector, options={}) ->
-        columns = (col for col, val of (options.fields ? {}) when val)
-        params = []
-
-        where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
-
-        query: "SELECT #{columnsToString columns} FROM #{escapeName name}" \
-            + if where.length > 0 then " WHERE #{where}" else "" \
-            + if _.isFinite( options.limit ) then " LIMIT #{options.limit}" else ""
-        params: params
 
 
 Convert Mongo modifiers into SQL `UPDATE` fragments
@@ -164,7 +157,7 @@ Convert Mongo document to `INSERT` statement
     makeInsert = (name, document) ->
         {columns, values, params} = cvp document
 
-        query: "INSERT INTO #{escapeName name} (#{columnsToString columns}) VALUES (#{values.join ","})"
+        query: "INSERT INTO #{escapeName name} (#{columnsToString name, columns}) VALUES (#{values.join ","})"
         params: params
 
 
@@ -175,7 +168,7 @@ Convert Mongo selector and mutator to `UPDATE` statement
 
         where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
 
-        query: "UPDATE #{escapeName name} SET (#{columnsToString columns}) = (#{values.join ","})" \
+        query: "UPDATE #{escapeName name} SET (#{columnsToString name, columns}) = (#{values.join ","})" \
             + if where.length > 0 then " WHERE #{where}" else ""
         params: params
 
@@ -218,10 +211,14 @@ Set up endpoints for the client to hit
         m = {}
 
         _.each ["insert", "update", "remove"], (method) ->
-            m[pfx + method] = ->
-                validateMethodName = "_validate" + method.charAt(0).toUpperCase() + method.slice(1)
-                collection[validateMethodName].apply collection, arguments
-                (methods[method] ? collection[method]).apply collection, arguments
+            if not PgCollection._methods[pfx + method]
+                m[pfx + method] = ->
+                    console.log pfx + method, arguments
+                    validateMethodName = "_validate" + method.charAt(0).toUpperCase() + method.slice(1)
+                    collection[validateMethodName].apply collection, arguments
+                    (methods[method] ? collection[method]).apply collection, arguments
+
+        _.extend PgCollection._methods, m
 
         Meteor.methods m
 
@@ -344,6 +341,8 @@ Global configuration
         @config: (options) =>
             _.extend @_config, options
 
+        @_methods = {}
+
 
 ## Instance methods
 
@@ -356,13 +355,48 @@ Allow instances to have custom configuration, but default to global config
                 update: { allow: [], deny: [] }
                 remove: { allow: [], deny: [] }
             @config = _.extend {}, PgCollection._config, options
+            @references = options.references ? {}
             setupMethods @, options.methods
+
+
+
+Convert Mongo query to SQL `SELECT` statement
+
+        makeSelect: (selector, options={}) ->
+            self = @
+            ename = escapeName self.name
+            columns = (escapeColumn(self.name, col) for col, val of (options.fields ? {}) when val)
+            joins = []
+            params = []
+
+            if columns.length is 0
+                columns.push "#{ename}.*"
+
+            _.each self.references, (ref, col) ->
+                table = escapeName ref.table
+                columns.push "json_agg(DISTINCT #{table}) #{table}"
+                joins.push " LEFT JOIN #{table} ON (#{table}.#{escapeName ref.its} = #{ename}.#{escapeName ref.my})"
+
+            where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
+
+            if joins.length > 0
+                groupby = " GROUP BY (" + _.map( self.config.primary_keys, (k) ->
+                     "#{ename}.#{escapeName k}" ).join(",") + ")"
+            else
+                groupby = ""
+
+            query: "SELECT #{columns.join ","} FROM #{ename}" \
+                + (if joins.length > 0 then joins.join("") else "") \
+                + (if where.length > 0 then " WHERE #{where}" else "") \
+                + groupby \
+                + (if _.isFinite( options.limit ) then " LIMIT #{options.limit}" else "")
+            params: params
 
 
 Simulate Mongo's `find` method
 
         find: (criteria, options) ->
-            {query, params} = makeSelect @name, criteria, options
+            {query, params} = @makeSelect criteria, options
             new PgCursor @, @exec query, params
 
         findOne: (criteria, options) ->
@@ -446,7 +480,10 @@ Connect to the postgres server and execute `fn`
             self = @
             {error, result} = Async.runSync (done) ->
                 pg.connect self.config.connection, (err, client, release) ->
-                    fn client, release, done
+                    if err
+                        console.error err
+                    else
+                        fn client, release, done
             throw error if error
             result
 
