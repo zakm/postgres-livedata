@@ -16,7 +16,7 @@ Escape Postgres identifiers
 Escape a single column name
 
     escapeColumn = (name, column) ->
-        "#{escapeName name}.#{escapeName col}"
+        "#{escapeName name}.#{escapeName column}"
 
 
 Convert a list of column names to a string
@@ -151,15 +151,6 @@ Convert a document/mutator to columns, values, and parameters
         columns: columns
         values: values
         params: params
-
-Convert Mongo document to `INSERT` statement
-
-    makeInsert = (name, document) ->
-        {columns, values, params} = cvp document
-
-        query: "INSERT INTO #{escapeName name} (#{columnsToString name, columns}) VALUES (#{values.join ","})"
-        params: params
-
 
 Convert Mongo selector and mutator to `UPDATE` statement
 
@@ -358,6 +349,68 @@ Allow instances to have custom configuration, but default to global config
             @references = options.references ? {}
             setupMethods @, options.methods
 
+Convert Mongo document to `INSERT` statement
+
+        # [{a:1,b:2,c:3}, {a:4,b:5}, {b:6,c:7,d:8}]
+        # =>
+        # { keys: [a,b,c,d], rows: [[1,2,3,null],[4,5,null,null],[null,6,7,8]] }
+        _documentsToRows: (documents) ->
+            columns = {}
+            for document in documents
+                for k of document
+                    columns[k] = true
+
+            keys: columns = _.keys columns
+            rows: _.map documents, (document) ->
+                _.map columns, (col) ->
+                    document[col] ? null
+
+
+        makeInsert: (document, options={}) ->
+            self = @
+
+            if self.references?
+                columns = []
+                values = []
+                params = []
+                foreign = {}
+
+                for col, vals of document
+                    if (ref = self.references[col])?
+                        f = foreign[ref.table] ?= { cols: [], vals: [], its: ref.my, my: ref.its }
+
+                        {keys,rows} = self._documentsToRows if _.isArray(vals) then vals else [vals]
+
+                        f.cols = f.cols.concat keys
+                        f.vals = f.vals.concat _.map rows, (row) ->
+                            _.map row, (val) ->
+                                nextParam val, params
+                    else
+                        columns.push col
+                        values.push nextParam vals, params
+
+                inserts = []
+                b = 0
+                for table, {cols, vals, its, my} of foreign
+                    valueStrs = _.map vals, (val) -> "(" + val.join(",") + ")"
+                    insert =
+                        "INSERT INTO #{escapeName table} (#{escapeName my},#{_.map(cols,escapeName).join ","})
+                        SELECT #{escapeColumn "a", its}, \"b#{b}\".* FROM \"a\"
+                        CROSS JOIN (VALUES #{valueStrs.join ","}) \"b#{b}\""
+                    if ++b < _.size foreign
+                        inserts.push ",\"a#{b}\" AS (#{insert})"
+                    else
+                        inserts.push " " + insert
+
+                query: "WITH \"a\" AS (INSERT INTO #{escapeName self.name}
+                    (#{_.map columns, escapeName}) VALUES (#{values.join ","}) RETURNING *)" \
+                        + if inserts.length > 0 then inserts.join "" else ""
+                params: params
+
+            else
+                {columns, values, params} = cvp document
+                query: "INSERT INTO #{escapeName self.name} (#{columnsToString self.name, columns}) VALUES (#{values.join ","})"
+                params: params
 
 
 Convert Mongo query to SQL `SELECT` statement
@@ -451,14 +504,14 @@ Simulate Mongo's `insert` method
                 if options.atomic
                     @transact ->
                         for doc in document
-                            {query, params} = makeInsert self.name, doc
+                            {query, params} = self.makeInsert doc
                             @exec query, params
                 else
                     for doc in document
-                        {query, params} = makeInsert @name, doc
+                        {query, params} = self.makeInsert doc
                         @exec query, params
             else
-                {query, params} = makeInsert @name, document
+                {query, params} = self.makeInsert document
                 @exec query, params
 
 
