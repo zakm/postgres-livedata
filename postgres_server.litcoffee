@@ -50,7 +50,7 @@ Convert Mongo operators to Postgres operators
             $ne: "!="
         for mop,pop of ops
             if val[mop]?
-                return "#{escapeName name} #{pop} #{nextParam val[mop] params}"
+                return "#{escapeName name} #{pop} #{nextParam val[mop], params}"
 
         if vals = val.$in?
             vals = _.map( val.$in, (v) -> nextParam(v, params) ).join ","
@@ -127,7 +127,22 @@ Convert Mongo modifiers into SQL `UPDATE` fragments
             when "$currentDate"
                 for c, v of val
                     columns.push c
-                    values.push "NOW()"
+                    values.push "CURRENT_TIMESTAMP"
+
+            when "$addToSet"
+                false
+
+            when "$pop"
+                false
+
+            when "$pullAll"
+                false
+
+            when "$pull"
+                false
+
+            when "$push"
+                false
 
             else
                 columns.push col
@@ -151,18 +166,6 @@ Convert a document/mutator to columns, values, and parameters
         columns: columns
         values: values
         params: params
-
-Convert Mongo selector and mutator to `UPDATE` statement
-
-    makeUpdate = (name, selector, mutator) ->
-        {columns, values, params} = cvp mutator, "update"
-
-        where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
-
-        query: "UPDATE #{escapeName name} SET (#{columnsToString name, columns}) = (#{values.join ","})" \
-            + if where.length > 0 then " WHERE #{where}" else ""
-        params: params
-
 
 Convert Mongo selector to `DELETE` statement
 
@@ -365,37 +368,45 @@ Convert Mongo document to `INSERT` statement
                 _.map columns, (col) ->
                     document[col] ? null
 
+        _foreignColumns: (document, update) ->
+            columns = []
+            values = []
+            params = []
+            foreign = {}
+
+            for col, vals of document
+                if (ref = self.references[col])?
+                    f = foreign[ref.table] ?= { cols: [], vals: [], remote: ref.local, local: ref.remote }
+
+                    {keys,rows} = self._documentsToRows if _.isArray(vals) then vals else [vals]
+
+                    f.cols = f.cols.concat keys
+                    f.vals = f.vals.concat _.map rows, (row) ->
+                        _.map row, (val) ->
+                            nextParam val, params
+                else
+                    columns.push col
+                    values.push nextParam vals, params
+
+            columns: columns
+            values: values
+            params: params
+            foreign: foreign
+
 
         makeInsert: (document, options={}) ->
             self = @
 
             if self.references?
-                columns = []
-                values = []
-                params = []
-                foreign = {}
-
-                for col, vals of document
-                    if (ref = self.references[col])?
-                        f = foreign[ref.table] ?= { cols: [], vals: [], its: ref.my, my: ref.its }
-
-                        {keys,rows} = self._documentsToRows if _.isArray(vals) then vals else [vals]
-
-                        f.cols = f.cols.concat keys
-                        f.vals = f.vals.concat _.map rows, (row) ->
-                            _.map row, (val) ->
-                                nextParam val, params
-                    else
-                        columns.push col
-                        values.push nextParam vals, params
+                {columns, values, params, foreign} = self._foreignColumns document
 
                 inserts = []
                 b = 0
-                for table, {cols, vals, its, my} of foreign
+                for table, {cols, vals, remote, local} of foreign
                     valueStrs = _.map vals, (val) -> "(" + val.join(",") + ")"
                     insert =
-                        "INSERT INTO #{escapeName table} (#{escapeName my},#{_.map(cols,escapeName).join ","})
-                        SELECT #{escapeColumn "a", its}, \"b#{b}\".* FROM \"a\"
+                        "INSERT INTO #{escapeName table} (#{escapeName local},#{_.map(cols,escapeName).join ","})
+                        SELECT #{escapeColumn "a", remote}, \"b#{b}\".* FROM \"a\"
                         CROSS JOIN (VALUES #{valueStrs.join ","}) \"b#{b}\""
                     if ++b < _.size foreign
                         inserts.push ",\"a#{b}\" AS (#{insert})"
@@ -410,6 +421,24 @@ Convert Mongo document to `INSERT` statement
             else
                 {columns, values, params} = cvp document
                 query: "INSERT INTO #{escapeName self.name} (#{columnsToString self.name, columns}) VALUES (#{values.join ","})"
+                params: params
+
+
+Convert Mongo selector and mutator to `UPDATE` statement
+
+        makeUpdate: (selector, mutator) -> # TODO have this handle @references
+            self = @
+
+            if self.references?
+                {columns, values, params, foreign} = self._foreignColumns document, "update"
+                throw new Meteor.Error 500, "Not yet implemented"
+            else
+                {columns, values, params} = cvp mutator, "update"
+
+                where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
+
+                query: "UPDATE #{escapeName self.name} SET (#{columnsToString self.name, columns}) = (#{values.join ","})" \
+                    + if where.length > 0 then " WHERE #{where}" else ""
                 params: params
 
 
@@ -428,7 +457,7 @@ Convert Mongo query to SQL `SELECT` statement
             _.each self.references, (ref, col) ->
                 table = escapeName ref.table
                 columns.push "json_agg(DISTINCT #{table}) #{table}"
-                joins.push " LEFT JOIN #{table} ON (#{table}.#{escapeName ref.its} = #{ename}.#{escapeName ref.my})"
+                joins.push " LEFT JOIN #{table} ON (#{table}.#{escapeName ref.remote} = #{ename}.#{escapeName ref.local})"
 
             where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
 
@@ -518,7 +547,7 @@ Simulate Mongo's `insert` method
 Simulate Mongo's `update` method
 
         update: (selector, mutator, options={}) ->
-            {query, params} = makeUpdate @name, selector, mutator
+            {query, params} = @makeUpdate selector, mutator
             @exec query, params
 
 Simulate Mongo's `remove` method

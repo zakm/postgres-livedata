@@ -70,3 +70,4 @@ Reactive templates don't look any different.
 - Update the tests to cover recent changes
 - Handle tables with multiple primary keys
 - Reconcile Meteor/Mongo's `_id`s with Postgres' primary keys
+- Have a better way to describe relations between table that make up a "document", maybe using (simple schema)[https://github.com/aldeed/meteor-simple-schema]?
