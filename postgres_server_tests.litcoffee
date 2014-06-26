@@ -206,12 +206,12 @@ TODO, maybe
 
         testQuery "select $size json array",
             PgCollection::makeSelect.call( fake, { elephant: { $size: 10 } } )
-            expect + ' json_array_length("elephant") = $1',
+            expect + ' JSON_ARRAY_LENGTH("elephant") = $1',
             [10]
 
         testQuery "select $size array",
             PgCollection::makeSelect.call( fake, { elephant: { $size: 10 } } )
-            expect + ' array_length("elephant") = $1',
+            expect + ' ARRAY_LENGTH("elephant") = $1',
             [10]
 
 
@@ -231,12 +231,15 @@ TODO, maybe
 
 # Relational selects
 
-`references: { some_column: { table: "foreign", remote: "remote", local: "id" }` is like declaring
+`references: { some_column: { foreign_table: "foreign", foreign_id: "remote", local_id: "id" }` is like declaring
 `"some_column" TYPE REFERENCES "foreign" ("remote")` in the SQL table where the primary key is `"id"`
 
-        faker = { name: "test", references: { some_column: { table: "foreign": remote: "remote", local: "id" } } }
-        expect = 'SELECT "test".*, JSON_AGG(DISTINCT "foreign") "some_column" FROM "test"' \
-            + ' LEFT JOIN "foreign" ON ("foreign"."remote" = "test"."id") GROUP BY "test"."id"'
+an additional `array_of` treats the remote table like an array of just the specified column
+
+        faker  = { name: "test", references: { some_column: { foreign_table: "ftable": foreign_id: "fid", local_id: "lid" } } }
+        fakerc = { name: "test", references: { some_column: { foreign_table: "ftable": foreign_id: "fid", local_id: "lid", array_of: "column" } } }
+        expect = 'SELECT "test".*, JSON_AGG(DISTINCT "ftable") "some_column" FROM "test"' \
+            + ' LEFT JOIN "ftable" ON ("ftable"."fid" = "test"."lid") GROUP BY "test"."lid"'
 
         testQuery "select relation empty object",
             PgCollection::makeSelect.call( faker, {} ),
@@ -245,6 +248,30 @@ TODO, maybe
         testQuery "select relation no arguments",
             PgCollection::makeSelect.call( faker ),
             expect
+
+## Array
+
+        testQuery "select relation $all",
+            PgCollection::makeSelect.call( fakerc, { some_column: { $all: ['director','producer'] } } )
+            'SELECT "test".*, ARRAY_AGG(DISTINCT "ftable"."column") "some_column" FROM "test"' \
+                + ' LEFT JOIN "ftable" ON ("ftable"."fid" = "test"."lid") GROUP BY "test"."lid"' \
+                + ' HAVING ARRAY_AGG(DISTINCT "ftable"."column") @> ARRAY[$1,$2]'
+            ['director','producer']
+
+        testQuery "select relation $elemMatch",
+            PgCollection::makeSelect.call( faker, { some_column: { $elemMatch: { address: "foo@bar.com", primary: true } } } )
+            expect + ' HAVING BOOL_OR("ftable"."address" = $1) AND BOOL_OR("ftable"."primary" = $2)'
+            ['foo@bar.com','true']
+
+        testQuery "select relation $size array",
+            PgCollection::makeSelect.call( fakerc, { some_column: { $size: 10 } } )
+            expect + ' HAVING COUNT("ftable") = $1'
+            [10]
+
+        testQuery "select relation $size ",
+            PgCollection::makeSelect.call( faker, { some_column: { $size: 10 } } )
+            expect + ' HAVING COUNT("ftable") = $1'
+            [10]
 
 
 # Inserts
