@@ -13,22 +13,6 @@ Escape Postgres identifiers
             '"' + name.replace(/"/g, '""') + '"'
 
 
-Escape a single column name
-
-    escapeColumn = (name, column) ->
-        "#{escapeName name}.#{escapeName column}"
-
-
-Convert a list of column names to a string
-
-    columnsToString = (name, columns) ->
-        ename = escapeName name
-        if columns.length > 0
-            _.map( columns, (col) -> "#{ename}.#{escapeName col}" ).join ","
-        else
-            "#{ename}.*"
-
-
 Build up list of parameters for paramaterized queries
 
     nextParam = (val, params) ->
@@ -48,7 +32,7 @@ Convert Mongo operators to Postgres operators
             $lt: "<"
             $lte: "<="
             $ne: "!="
-        for mop,pop of ops
+        for mop, pop of ops
             if val[mop]?
                 return "#{escapeName name} #{pop} #{nextParam val[mop], params}"
 
@@ -60,24 +44,39 @@ Convert Mongo operators to Postgres operators
             vals = _.map( val.$nin, (v) -> nextParam(v, params) ).join ","
             return "#{escapeName name} NOT IN (#{vals})"
 
+        if val.$exists?
+            return "#{escapeName name} IS #{if val.$exists then "NOT " else ""}NULL"
+
+        if val.$mod?
+            return "#{escapeName name} % #{nextParam val.$mod[0], params} = #{nextParam val.$mod[1], params}"
+
+        if val.$regex?
+            ignoreCase = val.$regex.ignoreCase or val.$options is "i"
+            source = if _.isString(val.$regex) then val.$regex else val.$regex.source
+            return "#{escapeName name} ~" + (if ignoreCase then "*" else "") \
+                + " #{nextParam source, params}"
+
 
 Helper for whereClause
 
-    simpleSelector = (selector, params) ->
+    _whereHelper = (selector, params) ->
         "(" + _.map( selector, (value, name) -> whereClause(name, value, params) ).join(" AND ") + ")"
 
 
-Convert Mongo selector to Postgres `WHERE` clause
+Convert Mongo selector to SQL `WHERE` clause
 
     whereClause = (name, value, params) ->
         if name is "$or"
-            _.map( value, (selector) -> simpleSelector(selector, params) ).join(" OR ")
+            _.map( value, (selector) -> _whereHelper(selector, params) ).join(" OR ")
         else if name is "$and"
-            _.map( value, (selector) -> simpleSelector(selector, params) ).join(" AND ")
+            _.map( value, (selector) -> _whereHelper(selector, params) ).join(" AND ")
         else if name is "$not"
-            "NOT (" + _.map( value, (value, name) -> whereClause(name, value, params) ).join(" AND ") + ")"
+            if _.isArray value
+                "NOT (" + _.map( value, (selector) -> _whereHelper( selector, params ) ).join(" AND ") + ")"
+            else
+                "NOT (" + _.map( value, (value, name) -> whereClause(name, value, params) ).join(" AND ") + ")"
         else if name is "$nor"
-            "NOT " + _.map( value, (selector) -> simpleSelector(selector, params) ).join(" OR ")
+            "NOT (" + _.map( value, (selector) -> _whereHelper(selector, params) ).join(" OR ") + ")"
         else
             switch typeof value
                 when "string", "number"
@@ -406,7 +405,7 @@ Convert Mongo document to `INSERT` statement
                     valueStrs = _.map vals, (val) -> "(" + val.join(",") + ")"
                     insert =
                         "INSERT INTO #{escapeName table} (#{escapeName local},#{_.map(cols,escapeName).join ","})
-                        SELECT #{escapeColumn "a", remote}, \"b#{b}\".* FROM \"a\"
+                        SELECT #{escapeName ["a", remote]}, \"b#{b}\".* FROM \"a\"
                         CROSS JOIN (VALUES #{valueStrs.join ","}) \"b#{b}\""
                     if ++b < _.size foreign
                         inserts.push ",\"a#{b}\" AS (#{insert})"
@@ -420,7 +419,7 @@ Convert Mongo document to `INSERT` statement
 
             else
                 {columns, values, params} = cvp document
-                query: "INSERT INTO #{escapeName self.name} (#{columnsToString self.name, columns}) VALUES (#{values.join ","})"
+                query: "INSERT INTO #{escapeName self.name} (#{_.map(escapeName, columns).join ","}) VALUES (#{values.join ","})"
                 params: params
 
 
@@ -437,7 +436,7 @@ Convert Mongo selector and mutator to `UPDATE` statement
 
                 where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
 
-                query: "UPDATE #{escapeName self.name} SET (#{columnsToString self.name, columns}) = (#{values.join ","})" \
+                query: "UPDATE #{escapeName self.name} SET (#{_.map(escapeName, columns).join ","}) = (#{values.join ","})" \
                     + if where.length > 0 then " WHERE #{where}" else ""
                 params: params
 
@@ -447,12 +446,12 @@ Convert Mongo query to SQL `SELECT` statement
         makeSelect: (selector, options={}) ->
             self = @
             ename = escapeName self.name
-            columns = (escapeColumn(self.name, col) for col, val of (options.fields ? {}) when val)
+            columns = (escapeName([self.name, col]) for col, val of (options.fields ? {}) when val)
             joins = []
             params = []
 
             if columns.length is 0
-                columns.push "#{ename}.*"
+                columns.push if self.references then "#{ename}.*" else "*"
 
             _.each self.references, (ref, col) ->
                 table = escapeName ref.table

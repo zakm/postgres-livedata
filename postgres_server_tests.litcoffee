@@ -34,7 +34,7 @@
 
         fake = { name: "test" }
 
-        expect = 'SELECT "test".* FROM "test"'
+        expect = 'SELECT * FROM "test"'
 
 ## Sanity test
 
@@ -60,12 +60,12 @@
 
         testQuery "select multiple params",
             PgCollection::makeSelect.call( fake, { id: "abc", foo: "def" } ),
-            expect + ' ("id" = $1 AND "foo" = $2)',
+            expect + ' "id" = $1 AND "foo" = $2',
             ["abc","def"]
 
         testQuery "select same params",
             PgCollection::makeSelect.call( fake, { id: "abc", foo: "abc" } ),
-            expect + ' ("id" = $1 AND "foo" = $1)',
+            expect + ' "id" = $1 AND "foo" = $1',
             ["abc"]
 
 
@@ -93,12 +93,12 @@
 
         testQuery "select $in",
             PgCollection::makeSelect.call( fake, { foo: { $in: ['a','b','c'] } } ),
-            expect + ' "foo" IN ($1, $2, $3)',
+            expect + ' "foo" IN ($1,$2,$3)',
             ['a','b','c']
 
         testQuery "select $nin",
             PgCollection::makeSelect.call( fake, { foo: { $nin: ['d','e','f'] } } ),
-            expect + ' NOT "foo" IN ($1, $2, $3)',
+            expect + ' "foo" NOT IN ($1,$2,$3)',
             ['d','e','f']
 
 ## Compounds
@@ -106,22 +106,22 @@
 
         testQuery "select $and",
             PgCollection::makeSelect.call( fake, { $and: [ { foo: "abc" }, { bar: "def" } ] } ),
-            expect + ' ("foo" = $1 AND "bar" = $2)',
+            expect + ' ("foo" = $1) AND ("bar" = $2)',
             ["abc","def"]
 
         testQuery "select $and nested",
             PgCollection::makeSelect.call( fake, { $and: [ { foo: "abc" }, { bar: "def", baz: "ghi" } ] } ),
-            expect + ' ("foo" = $1 AND ("bar" = $2 AND "baz" = $3))',
+            expect + ' ("foo" = $1) AND ("bar" = $2 AND "baz" = $3)',
             ["abc","def", "ghi"]
 
         testQuery "select $or",
             PgCollection::makeSelect.call( fake, { $or: [ { foo: "abc" }, { bar: "def" } ] } ),
-            expect + ' ("foo" = $1 OR "bar" = $2)',
+            expect + ' ("foo" = $1) OR ("bar" = $2)',
             ["abc","def"]
 
         testQuery "select $or nested",
             PgCollection::makeSelect.call( fake, { $or: [ { foo: "abc" }, { bar: "def", baz: "ghi" } ] } ),
-            expect + ' ("foo" = $1 OR ("bar" = $2 AND "baz" = $3))',
+            expect + ' ("foo" = $1) OR ("bar" = $2 AND "baz" = $3)',
             ["abc","def","ghi"]
 
 
@@ -129,22 +129,22 @@
 
         testQuery "select $not multiple",
             PgCollection::makeSelect.call( fake, { $not: [ { foo: "abc" }, { bar: "def" } ] } ),
-            expect + ' NOT ("foo" = $1 AND "bar" = $2)',
+            expect + ' NOT (("foo" = $1) AND ("bar" = $2))',
             ["abc","def"]
 
         testQuery "select $not nested",
             PgCollection::makeSelect.call( fake, { $not: [ { foo: "abc" }, { bar: "def", baz: "ghi" } ] } ),
-            expect + ' NOT ("foo" = $1 AND ("bar" = $2 AND "baz" = $3))',
+            expect + ' NOT (("foo" = $1) AND ("bar" = $2 AND "baz" = $3))',
             ["abc","def","ghi"]
 
         testQuery "select $nor multiple",
             PgCollection::makeSelect.call( fake, { $nor: [ { foo: "abc" }, { bar: "def" } ] } ),
-            expect + ' NOT ("foo" = $1 OR "bar" = $2)',
+            expect + ' NOT (("foo" = $1) OR ("bar" = $2))',
             ["abc","def"]
 
         testQuery "select $nor nested",
             PgCollection::makeSelect.call( fake, { $nor: [ { foo: "abc" }, { bar: "def", baz: "ghi" } ] } ),
-            expect + ' NOT ("foo" = $1 OR ("bar" = $2 AND "baz" = $3))',
+            expect + ' NOT (("foo" = $1) OR ("bar" = $2 AND "baz" = $3))',
             ["abc","def","ghi"]
 
 ## Exists / IS NULL / IS NOT NULL
@@ -153,7 +153,7 @@
             PgCollection::makeSelect.call( fake, { bonobo: { $exists: true } } )
             expect + ' "bonobo" IS NOT NULL'
 
-        testQuery "select $exists: true",
+        testQuery "select $exists: false",
             PgCollection::makeSelect.call( fake, { rhesus: { $exists: false } } ) # there's no right way to eat a rhesus
             expect + ' "rhesus" IS NULL'
 
