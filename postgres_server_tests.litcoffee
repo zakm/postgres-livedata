@@ -32,19 +32,19 @@
 
 # Selects
 
-        fake = { name: "test" }
+        fake = _.extend { name: "test" }, PgCollection.prototype
 
         expect = 'SELECT * FROM "test"'
 
 ## Sanity test
 
         test.equal "select empty object",
-            PgCollection::makeSelect.call( fake, {} ).query,
+            fake.makeSelect( {} ).query,
             expect,
             []
 
         test.equal "select no arguments",
-            PgCollection::makeSelect.call( fake ).query,
+            fake.makeSelect().query,
             expect,
             []
 
@@ -54,17 +54,17 @@
         expect = "#{expect} WHERE"
 
         testQuery "select single param",
-            PgCollection::makeSelect.call( fake, { id: "abc" } ),
+            fake.makeSelect( id: "abc" ),
             expect + ' "id" = $1',
             ["abc"]
 
         testQuery "select multiple params",
-            PgCollection::makeSelect.call( fake, { id: "abc", foo: "def" } ),
+            fake.makeSelect( id: "abc", foo: "def" ),
             expect + ' "id" = $1 AND "foo" = $2',
             ["abc","def"]
 
         testQuery "select same params",
-            PgCollection::makeSelect.call( fake, { id: "abc", foo: "abc" } ),
+            fake.makeSelect( id: "abc", foo: "abc" ),
             expect + ' "id" = $1 AND "foo" = $1',
             ["abc"]
 
@@ -72,32 +72,32 @@
 ## Comparisons
 
         testQuery "select $gt",
-            PgCollection::makeSelect.call( fake, { noses: { $gt: 1 } } ),
+            fake.makeSelect( noses: { $gt: 1 } ),
             expect + ' "noses" > $1'
 
         testQuery "select $gte",
-            PgCollection::makeSelect.call( fake, { eyes: { $gte: 4 } } ),
+            fake.makeSelect( eyes: { $gte: 4 } ),
             expect + ' "eyes" >= $1'
 
         testQuery "select $lt",
-            PgCollection::makeSelect.call( fake, { brains: { $lt: 1 } } ),
+            fake.makeSelect( brains: { $lt: 1 } ),
             expect + ' "brains" < $1'
 
         testQuery "select $lte",
-            PgCollection::makeSelect.call( fake, { toeses: { $lte: 10 } } ),
+            fake.makeSelect( toeses: { $lte: 10 } ),
             expect + ' "toeses" <= $1'
 
         testQuery "select $ne",
-            PgCollection::makeSelect.call( fake, { vno: { $ne: 5 } } ),
+            fake.makeSelect( vno: { $ne: 5 } ),
             expect + ' "vno" != $1'
 
         testQuery "select $in",
-            PgCollection::makeSelect.call( fake, { foo: { $in: ['a','b','c'] } } ),
+            fake.makeSelect( foo: { $in: ['a','b','c'] } ),
             expect + ' "foo" IN ($1,$2,$3)',
             ['a','b','c']
 
         testQuery "select $nin",
-            PgCollection::makeSelect.call( fake, { foo: { $nin: ['d','e','f'] } } ),
+            fake.makeSelect( foo: { $nin: ['d','e','f'] } ),
             expect + ' "foo" NOT IN ($1,$2,$3)',
             ['d','e','f']
 
@@ -105,22 +105,22 @@
 
 
         testQuery "select $and",
-            PgCollection::makeSelect.call( fake, { $and: [ { foo: "abc" }, { bar: "def" } ] } ),
+            fake.makeSelect( $and: [ { foo: "abc" }, { bar: "def" } ] ),
             expect + ' ("foo" = $1) AND ("bar" = $2)',
             ["abc","def"]
 
         testQuery "select $and nested",
-            PgCollection::makeSelect.call( fake, { $and: [ { foo: "abc" }, { bar: "def", baz: "ghi" } ] } ),
+            fake.makeSelect( $and: [ { foo: "abc" }, { bar: "def", baz: "ghi" } ] ),
             expect + ' ("foo" = $1) AND ("bar" = $2 AND "baz" = $3)',
             ["abc","def", "ghi"]
 
         testQuery "select $or",
-            PgCollection::makeSelect.call( fake, { $or: [ { foo: "abc" }, { bar: "def" } ] } ),
+            fake.makeSelect( $or: [ { foo: "abc" }, { bar: "def" } ] ),
             expect + ' ("foo" = $1) OR ("bar" = $2)',
             ["abc","def"]
 
         testQuery "select $or nested",
-            PgCollection::makeSelect.call( fake, { $or: [ { foo: "abc" }, { bar: "def", baz: "ghi" } ] } ),
+            fake.makeSelect( $or: [ { foo: "abc" }, { bar: "def", baz: "ghi" } ] ),
             expect + ' ("foo" = $1) OR ("bar" = $2 AND "baz" = $3)',
             ["abc","def","ghi"]
 
@@ -128,39 +128,39 @@
 ## Negation
 
         testQuery "select $not multiple",
-            PgCollection::makeSelect.call( fake, { $not: [ { foo: "abc" }, { bar: "def" } ] } ),
+            fake.makeSelect( $not: [ { foo: "abc" }, { bar: "def" } ] ),
             expect + ' NOT (("foo" = $1) AND ("bar" = $2))',
             ["abc","def"]
 
         testQuery "select $not nested",
-            PgCollection::makeSelect.call( fake, { $not: [ { foo: "abc" }, { bar: "def", baz: "ghi" } ] } ),
+            fake.makeSelect( $not: [ { foo: "abc" }, { bar: "def", baz: "ghi" } ] ),
             expect + ' NOT (("foo" = $1) AND ("bar" = $2 AND "baz" = $3))',
             ["abc","def","ghi"]
 
         testQuery "select $nor multiple",
-            PgCollection::makeSelect.call( fake, { $nor: [ { foo: "abc" }, { bar: "def" } ] } ),
+            fake.makeSelect( $nor: [ { foo: "abc" }, { bar: "def" } ] ),
             expect + ' NOT (("foo" = $1) OR ("bar" = $2))',
             ["abc","def"]
 
         testQuery "select $nor nested",
-            PgCollection::makeSelect.call( fake, { $nor: [ { foo: "abc" }, { bar: "def", baz: "ghi" } ] } ),
+            fake.makeSelect( $nor: [ { foo: "abc" }, { bar: "def", baz: "ghi" } ] ),
             expect + ' NOT (("foo" = $1) OR ("bar" = $2 AND "baz" = $3))',
             ["abc","def","ghi"]
 
 ## Exists / IS NULL / IS NOT NULL
 
         testQuery "select $exists: true",
-            PgCollection::makeSelect.call( fake, { bonobo: { $exists: true } } )
+            fake.makeSelect( bonobo: { $exists: true } )
             expect + ' "bonobo" IS NOT NULL'
 
         testQuery "select $exists: false",
-            PgCollection::makeSelect.call( fake, { rhesus: { $exists: false } } ) # there's no right way to eat a rhesus
+            fake.makeSelect( rhesus: { $exists: false } ) # there's no right way to eat a rhesus
             expect + ' "rhesus" IS NULL'
 
 ## Evaluation
 
         testQuery "select $mod",
-            PgCollection::makeSelect.call( fake, { income: { $mod: [4, 0] } } )
+            fake.makeSelect( income: { $mod: [4, 0] } )
             expect + ' "income" % $1 = $2',
             [4, 0]
 
@@ -169,17 +169,17 @@
 ### Regex
 
         testQuery "select $regex case sensitive",
-            PgCollection::makeSelect.call( fake, { company: { $regex: /Acme.*Corp/ } } )
+            fake.makeSelect( company: { $regex: /Acme.*Corp/ } )
             expect + ' "company" ~ $1',
             ['Acme.*Corp']
 
         testQuery "select $regex case INsensitive",
-            PgCollection::makeSelect.call( fake, { company: { $regex: /acme.*corp/i } } )
+            fake.makeSelect( company: { $regex: /acme.*corp/i } )
             expect + ' "company" ~* $1',
             ['acme.*corp']
 
         testQuery "select $regex case INsensitive string",
-            PgCollection::makeSelect.call( fake, { company: { $regex: 'acme.*corp', $options: 'i' } } )
+            fake.makeSelect( company: { $regex: 'acme.*corp', $options: 'i' } )
             expect + ' "company" ~* $1',
             ['acme.*corp']
 
@@ -190,27 +190,29 @@ TODO, maybe
 ## Array
 
         testQuery "select $all json array",
-            PgCollection::makeSelect.call( fake, { role: { $all: ['director','producer'] } } )
-            expect + ' ARRAY(SELECT * FROM json_array_elements("role"))::text[] @> ARRAY[$1,$2]',
+            _.extend( { types: { role: 'json' } }, fake ).makeSelect \
+                { role: { $all: ['director','producer'] } }
+            expect + ' ARRAY(SELECT * FROM JSON_ARRAY_ELEMENTS("role"))::text[] @> ARRAY[$1,$2]',
             ['director','producer']
 
         testQuery "select $all array", # TODO, config distinction between array and json array columns
-            PgCollection::makeSelect.call( fake, { role: { $all: ['director','producer'] } } )
+            fake.makeSelect( role: { $all: ['director','producer'] } )
             expect + ' "role" @> ARRAY[$1,$2]',
             ['director','producer']
 
         testQuery "select $elemMatch", # TODO, think about better handling types
-            PgCollection::makeSelect.call( fake, { email: { $elemMatch: { address: "foo@bar.com", primary: true } } } )
-            expect + ' ("email"->>\'address\' = $1 AND "email"->>\'primary\' = $2)',
-            ['foo@bar.com','true']
+            fake.makeSelect( email: { $elemMatch: { address: "foo@bar.com", primary: true } } )
+            expect + ' ("email"->>$1 = $2 AND "email"->>$3 = $4)',
+            ['address','foo@bar.com','primary',true]
 
         testQuery "select $size json array",
-            PgCollection::makeSelect.call( fake, { elephant: { $size: 10 } } )
+            _.extend( { types: { elephant: 'json' } }, fake ).makeSelect \
+                elephant: { $size: 10 }
             expect + ' JSON_ARRAY_LENGTH("elephant") = $1',
             [10]
 
         testQuery "select $size array",
-            PgCollection::makeSelect.call( fake, { elephant: { $size: 10 } } )
+            fake.makeSelect( elephant: { $size: 10 } )
             expect + ' ARRAY_LENGTH("elephant") = $1',
             [10]
 
@@ -218,58 +220,80 @@ TODO, maybe
 ## Specific fields / columns
 
         testQuery "select columns",
-            PgCollection::makeSelect.call( fake, { fields: { foo: 1, bar: 0, baz: 1 } } ),
+            fake.makeSelect( {}, fields: { foo: 1, bar: 0, baz: 1 } ),
             'SELECT "test"."foo","test"."baz" FROM "test"'
 
 
 ## Specifing a schema
 
         testQuery "select schema",
-            PgCollection::makeSelect.call( { name: ["schema","table"] } ),
-            'SELECT "schema"."table".* FROM "schema"."table"'
+            _.extend( fake, name: ["schema","table"] ).makeSelect({}),
+            'SELECT * FROM "schema"."table"'
 
 
 # Relational selects
 
-`references: { some_column: { foreign_table: "foreign", foreign_id: "remote", local_id: "id" }` is like declaring
+`relations: { some_column: { foreign_table: "foreign", foreign_id: "remote", local_id: "id" }` is like declaring
 `"some_column" TYPE REFERENCES "foreign" ("remote")` in the SQL table where the primary key is `"id"`
 
 an additional `array_of` treats the remote table like an array of just the specified column
 
-        faker  = { name: "test", references: { some_column: { foreign_table: "ftable": foreign_id: "fid", local_id: "lid" } } }
-        fakerc = { name: "test", references: { some_column: { foreign_table: "ftable": foreign_id: "fid", local_id: "lid", array_of: "column" } } }
-        expect = 'SELECT "test".*, JSON_AGG(DISTINCT "ftable") "some_column" FROM "test"' \
+        faker  = _.extend {
+            name: "test"
+            primary_keys: ["lid"]
+            relations:
+                some_column:
+                    foreign_table: "ftable"
+                    foreign_id: "fid"
+                    local_id: "lid"
+            }, PgCollection.prototype
+
+        fakerc = _.extend {
+            name: "test"
+            primary_keys: ["lid"]
+            relations:
+                some_column:
+                    foreign_table: "ftable"
+                    foreign_id: "fid"
+                    local_id: "lid"
+                    array_of: "column"
+            }, PgCollection.prototype
+
+        expect = 'SELECT "test".*,JSON_AGG(DISTINCT "ftable".*) "some_column" FROM "test"' \
             + ' LEFT JOIN "ftable" ON ("ftable"."fid" = "test"."lid") GROUP BY "test"."lid"'
 
+
+## Sanity test
+
         testQuery "select relation empty object",
-            PgCollection::makeSelect.call( faker, {} ),
+            faker.makeSelect( {} ),
             expect
 
         testQuery "select relation no arguments",
-            PgCollection::makeSelect.call( faker ),
+            faker.makeSelect()
             expect
 
 ## Array
 
         testQuery "select relation $all",
-            PgCollection::makeSelect.call( fakerc, { some_column: { $all: ['director','producer'] } } )
+            fakerc.makeSelect( some_column: { $all: ['director','producer'] } )
             'SELECT "test".*, ARRAY_AGG(DISTINCT "ftable"."column") "some_column" FROM "test"' \
                 + ' LEFT JOIN "ftable" ON ("ftable"."fid" = "test"."lid") GROUP BY "test"."lid"' \
                 + ' HAVING ARRAY_AGG(DISTINCT "ftable"."column") @> ARRAY[$1,$2]'
             ['director','producer']
 
         testQuery "select relation $elemMatch",
-            PgCollection::makeSelect.call( faker, { some_column: { $elemMatch: { address: "foo@bar.com", primary: true } } } )
+            faker.makeSelect( some_column: { $elemMatch: { address: "foo@bar.com", primary: true } } )
             expect + ' HAVING BOOL_OR("ftable"."address" = $1) AND BOOL_OR("ftable"."primary" = $2)'
             ['foo@bar.com','true']
 
         testQuery "select relation $size array",
-            PgCollection::makeSelect.call( fakerc, { some_column: { $size: 10 } } )
+            fakerc.makeSelect( some_column: { $size: 10 } )
             expect + ' HAVING COUNT("ftable") = $1'
             [10]
 
         testQuery "select relation $size ",
-            PgCollection::makeSelect.call( faker, { some_column: { $size: 10 } } )
+            faker.makeSelect( some_column: { $size: 10 } )
             expect + ' HAVING COUNT("ftable") = $1'
             [10]
 
@@ -279,17 +303,17 @@ an additional `array_of` treats the remote table like an array of just the speci
         expect = 'INSERT INTO "test"'
 
         testQuery "insert single column",
-            PgCollection::makeInsert.call( fake, { id: "abc" } ),
+            fake.makeInsert( id: "abc" ),
             expect + ' ("id") VALUES ($1)',
             ["abc"]
 
         testQuery "insert multiple columns",
-            PgCollection::makeInsert.call( fake, { id: "abc", foo: "def" } ),
+            fake.makeInsert( id: "abc", foo: "def" ),
             expect + ' ("id","foo") VALUES ($1,$2)',
             ["abc","def"]
 
         testQuery "insert one value into multiple columns",
-            PgCollection::makeInsert.call( fake, { id: "abc", foo: "abc" } ),
+            fake.makeInsert( id: "abc", foo: "abc" ),
             expect + ' ("id","foo") VALUES ($1,$1)',
             ["abc"]
 
@@ -298,7 +322,7 @@ an additional `array_of` treats the remote table like an array of just the speci
 The query shouldn't change from the base case if none of the columns are foreign
 
         testQuery "insert single value into relational table",
-            PgCollection::makeInsert.call( faker, { id: "abc" } ),
+            faker.makeInsert( id: "abc" ),
             expect + ' ("id") VALUES ($1)',
             ["abc"]
 
@@ -328,11 +352,11 @@ verify that they behave more or less the same
 
         user = new PgCollection ["test","user"],
             connection: "postgres://localhost/test"
-            references:
+            relations:
                 email:
-                    table: ["test","email"]
-                    its: "userid"
-                    my: "id"
+                    foreign_table: ["test","email"]
+                    foreign_id: "userid"
+                    local_id: "id"
 
 
         user.transact ->

@@ -23,68 +23,6 @@ Build up list of parameters for paramaterized queries
             "$#{params.length}"
 
 
-Convert Mongo operators to Postgres operators
-
-    operatorClause = (name, val, params) ->
-        ops =
-            $gt: ">"
-            $gte: ">="
-            $lt: "<"
-            $lte: "<="
-            $ne: "!="
-        for mop, pop of ops
-            if val[mop]?
-                return "#{escapeName name} #{pop} #{nextParam val[mop], params}"
-
-        if vals = val.$in?
-            vals = _.map( val.$in, (v) -> nextParam(v, params) ).join ","
-            return "#{escapeName name} IN (#{vals})"
-
-        if val.$nin?
-            vals = _.map( val.$nin, (v) -> nextParam(v, params) ).join ","
-            return "#{escapeName name} NOT IN (#{vals})"
-
-        if val.$exists?
-            return "#{escapeName name} IS #{if val.$exists then "NOT " else ""}NULL"
-
-        if val.$mod?
-            return "#{escapeName name} % #{nextParam val.$mod[0], params} = #{nextParam val.$mod[1], params}"
-
-        if val.$regex?
-            ignoreCase = val.$regex.ignoreCase or val.$options is "i"
-            source = if _.isString(val.$regex) then val.$regex else val.$regex.source
-            return "#{escapeName name} ~" + (if ignoreCase then "*" else "") \
-                + " #{nextParam source, params}"
-
-
-Helper for whereClause
-
-    _whereHelper = (selector, params) ->
-        "(" + _.map( selector, (value, name) -> whereClause(name, value, params) ).join(" AND ") + ")"
-
-
-Convert Mongo selector to SQL `WHERE` clause
-
-    whereClause = (name, value, params) ->
-        if name is "$or"
-            _.map( value, (selector) -> _whereHelper(selector, params) ).join(" OR ")
-        else if name is "$and"
-            _.map( value, (selector) -> _whereHelper(selector, params) ).join(" AND ")
-        else if name is "$not"
-            if _.isArray value
-                "NOT (" + _.map( value, (selector) -> _whereHelper( selector, params ) ).join(" AND ") + ")"
-            else
-                "NOT (" + _.map( value, (value, name) -> whereClause(name, value, params) ).join(" AND ") + ")"
-        else if name is "$nor"
-            "NOT (" + _.map( value, (selector) -> _whereHelper(selector, params) ).join(" OR ") + ")"
-        else
-            switch typeof value
-                when "string", "number"
-                    "#{escapeName name} = #{nextParam value, params}"
-                else
-                    operatorClause name, value, params
-
-
 Convert Mongo modifiers into SQL `UPDATE` fragments
 
     updates = (col, val, columns, values, params) ->
@@ -165,17 +103,6 @@ Convert a document/mutator to columns, values, and parameters
         columns: columns
         values: values
         params: params
-
-Convert Mongo selector to `DELETE` statement
-
-    makeDelete = (name, selector) ->
-        params = []
-        where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
-
-        query: "DELETE FROM #{escapeName name}" \
-            + if where.length > 0 then " WHERE #{where}" else ""
-        params: params
-
 
 Object that is thrown to trigger a rollback
 
@@ -348,7 +275,9 @@ Allow instances to have custom configuration, but default to global config
                 update: { allow: [], deny: [] }
                 remove: { allow: [], deny: [] }
             @config = _.extend {}, PgCollection._config, options
-            @references = options.references ? {}
+            @relations = options.relations ? {}
+            @types = options.types ? {}
+            @primary_keys = options.primary_keys ? []
             setupMethods @, options.methods
 
 Convert Mongo document to `INSERT` statement
@@ -374,8 +303,8 @@ Convert Mongo document to `INSERT` statement
             foreign = {}
 
             for col, vals of document
-                if (ref = self.references[col])?
-                    f = foreign[ref.table] ?= { cols: [], vals: [], remote: ref.local, local: ref.remote }
+                if (ref = self.relations[col])?
+                    f = foreign[ref.foreign_table] ?= { cols: [], vals: [], remote: ref.local_id, local: ref.foreign_id }
 
                     {keys,rows} = self._documentsToRows if _.isArray(vals) then vals else [vals]
 
@@ -393,10 +322,98 @@ Convert Mongo document to `INSERT` statement
             foreign: foreign
 
 
+Convert Mongo operators to Postgres operators
+
+        operatorClause: (name, val, params) ->
+            self = @
+            ops =
+                $gt: ">"
+                $gte: ">="
+                $lt: "<"
+                $lte: "<="
+                $ne: "!="
+            for mop, pop of ops
+                if val[mop]?
+                    return "#{escapeName name} #{pop} #{nextParam val[mop], params}"
+
+            if vals = val.$in?
+                vals = _.map( val.$in, (v) -> nextParam(v, params) ).join ","
+                return "#{escapeName name} IN (#{vals})"
+
+            if val.$nin?
+                vals = _.map( val.$nin, (v) -> nextParam(v, params) ).join ","
+                return "#{escapeName name} NOT IN (#{vals})"
+
+            if val.$exists?
+                return "#{escapeName name} IS #{if val.$exists then "NOT " else ""}NULL"
+
+            if val.$mod?
+                return "#{escapeName name} % #{nextParam val.$mod[0], params} = #{nextParam val.$mod[1], params}"
+
+            if val.$regex?
+                ignoreCase = val.$regex.ignoreCase or val.$options is "i"
+                source = if _.isString(val.$regex) then val.$regex else val.$regex.source
+                return "#{escapeName name} ~" + (if ignoreCase then "*" else "") \
+                    + " #{nextParam source, params}"
+
+            if val.$all?
+                if self.relations?[name]?
+                    throw new Meteor.Error 500, "Not yet implemented"
+                else
+                    ar = "ARRAY[" + _.map( val.$all, (x) -> nextParam x, params ).join(",") + "]"
+                    if self.types?[name] == 'json'
+                        return "ARRAY(SELECT * FROM JSON_ARRAY_ELEMENTS(#{escapeName name}))::text[] @> #{ar}"
+                    else
+                        return "#{escapeName name} @> #{ar}"
+
+            if val.$elemMatch?
+                if self.relations?[name]?
+                    throw new Meteor.Error 500, "Not yet implemented"
+                else
+                    return "(" + _.map( val.$elemMatch, (v,k) ->
+                        "#{escapeName name}->>#{nextParam k, params} = #{nextParam v, params}" ).join(" AND ") + ")"
+
+            if val.$size?
+                if self.relations?[name]?
+                    throw new Meteor.Error 500, "Not yet implemented"
+                else
+                    return (if self.types?[name] == 'json' then 'JSON_' else '') \
+                        + "ARRAY_LENGTH(#{escapeName name}) = #{nextParam val.$size, params}"
+
+Helper for whereClause
+
+        _whereHelper: (selector, params) ->
+            self = @
+            "(" + _.map( selector, (value, name) -> self._whereClause(name, value, params) ).join(" AND ") + ")"
+
+
+Convert Mongo selector to SQL `WHERE` clause
+
+        _whereClause: (name, value, params) ->
+            self = @
+            if name is "$or"
+                _.map( value, (selector) -> self._whereHelper(selector, params) ).join(" OR ")
+            else if name is "$and"
+                _.map( value, (selector) -> self._whereHelper(selector, params) ).join(" AND ")
+            else if name is "$not"
+                if _.isArray value
+                    "NOT (" + _.map( value, (selector) -> self._whereHelper(selector, params) ).join(" AND ") + ")"
+                else
+                    "NOT (" + _.map( value, (value, name) -> self._whereClause(name, value, params) ).join(" AND ") + ")"
+            else if name is "$nor"
+                "NOT (" + _.map( value, (selector) -> self._whereHelper(selector, params) ).join(" OR ") + ")"
+            else
+                switch typeof value
+                    when "string", "number"
+                        "#{escapeName name} = #{nextParam value, params}"
+                    else
+                        self.operatorClause name, value, params
+
+
         makeInsert: (document, options={}) ->
             self = @
 
-            if self.references?
+            if self.relations?
                 {columns, values, params, foreign} = self._foreignColumns document
 
                 inserts = []
@@ -425,16 +442,16 @@ Convert Mongo document to `INSERT` statement
 
 Convert Mongo selector and mutator to `UPDATE` statement
 
-        makeUpdate: (selector, mutator) -> # TODO have this handle @references
+        makeUpdate: (selector, mutator) -> # TODO have this handle @relations
             self = @
 
-            if self.references?
-                {columns, values, params, foreign} = self._foreignColumns document, "update"
+            if self.relations?
+                {columns, values, params, foreign} = self._foreignColumns mutator, "update"
                 throw new Meteor.Error 500, "Not yet implemented"
             else
                 {columns, values, params} = cvp mutator, "update"
 
-                where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
+                where = _.map( selector, (value, name) -> self._whereClause(name, value, params) ).join " AND "
 
                 query: "UPDATE #{escapeName self.name} SET (#{_.map(escapeName, columns).join ","}) = (#{values.join ","})" \
                     + if where.length > 0 then " WHERE #{where}" else ""
@@ -451,18 +468,20 @@ Convert Mongo query to SQL `SELECT` statement
             params = []
 
             if columns.length is 0
-                columns.push if self.references then "#{ename}.*" else "*"
+                columns.push if self.relations then "#{ename}.*" else "*"
 
-            _.each self.references, (ref, col) ->
-                table = escapeName ref.table
-                columns.push "json_agg(DISTINCT #{table}) #{table}"
-                joins.push " LEFT JOIN #{table} ON (#{table}.#{escapeName ref.remote} = #{ename}.#{escapeName ref.local})"
+            _.each self.relations, (ref, col) ->
+                console.log( ref, col )
+                table = escapeName ref.foreign_table
+                json = table + '.' + (if ref.array_of then escapeName(ref.array_of) else '*')
+                columns.push "JSON_AGG(DISTINCT #{json}) #{escapeName col}"
+                joins.push " LEFT JOIN #{table} ON (#{table}.#{escapeName ref.foreign_id} = #{ename}.#{escapeName ref.local_id})"
 
-            where = _.map( selector, (value, name) -> whereClause(name, value, params) ).join " AND "
+            where = _.map( selector, (value, name) -> self._whereClause(name, value, params) ).join " AND "
 
             if joins.length > 0
-                groupby = " GROUP BY (" + _.map( self.config.primary_keys, (k) ->
-                     "#{ename}.#{escapeName k}" ).join(",") + ")"
+                groupby = " GROUP BY " + _.map( self.primary_keys, (k) ->
+                     "#{ename}.#{escapeName k}" ).join(",")
             else
                 groupby = ""
 
@@ -471,6 +490,17 @@ Convert Mongo query to SQL `SELECT` statement
                 + (if where.length > 0 then " WHERE #{where}" else "") \
                 + groupby \
                 + (if _.isFinite( options.limit ) then " LIMIT #{options.limit}" else "")
+            params: params
+
+Convert Mongo selector to `DELETE` statement
+
+        makeDelete: (selector) ->
+            self = @
+            params = []
+            where = _.map( selector, (value, name) -> self._whereClause(name, value, params) ).join " AND "
+
+            query: "DELETE FROM #{escapeName self.name}" \
+                + if where.length > 0 then " WHERE #{where}" else ""
             params: params
 
 
@@ -552,7 +582,7 @@ Simulate Mongo's `update` method
 Simulate Mongo's `remove` method
 
         remove: (selector, options={}) ->
-            {query, params} = makeDelete @name, selector
+            {query, params} = @makeDelete selector
             @exec query, params
 
 Connect to the postgres server and execute `fn`
